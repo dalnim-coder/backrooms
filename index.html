@@ -11,29 +11,30 @@
   #app { position:fixed; inset:0; }
   canvas { display:block; width:100%; height:100%; }
 
-  /* 비네트 + 잡음 느낌 */
-  #vignette { position:fixed; inset:0; pointer-events:none;
+  #vignette { position:fixed; inset:0; pointer-events:none; z-index:5;
     background:radial-gradient(ellipse at center, rgba(0,0,0,0) 45%, rgba(0,0,0,0.55) 100%);
-    mix-blend-mode:multiply; z-index:5; }
+    mix-blend-mode:multiply; }
+  #danger { position:fixed; inset:0; pointer-events:none; z-index:6; opacity:0;
+    background:radial-gradient(ellipse at center, rgba(255,0,0,0) 35%, rgba(180,0,0,0.6) 100%);
+    transition:opacity 0.15s; }
 
-  /* HUD */
-  #hud { position:fixed; inset:0; pointer-events:none; z-index:6; color:#e9e2b0;
+  #hud { position:fixed; inset:0; pointer-events:none; z-index:7; color:#e9e2b0;
     text-shadow:0 0 6px rgba(0,0,0,0.8); }
   #lvl { position:absolute; top:env(safe-area-inset-top,12px); left:14px; margin-top:10px;
-    font-size:13px; letter-spacing:3px; opacity:0.75; }
+    font-size:13px; letter-spacing:3px; opacity:0.8; }
+  #key { position:absolute; top:env(safe-area-inset-top,12px); right:16px; margin-top:8px;
+    font-size:20px; opacity:0.25; filter:grayscale(1); transition:all 0.3s; }
+  #key.has { opacity:1; filter:none; text-shadow:0 0 12px #ffd24a; }
   #hint { position:absolute; bottom:14%; left:0; right:0; text-align:center;
-    font-size:13px; letter-spacing:2px; opacity:0; transition:opacity 1.2s; }
-  #hint.show { opacity:0.7; }
+    font-size:13px; letter-spacing:2px; opacity:0; transition:opacity 0.6s; }
+  #hint.show { opacity:0.85; }
 
-  /* 조이스틱 */
-  #stick { position:fixed; width:120px; height:120px; border-radius:50%;
+  #stick { position:fixed; width:120px; height:120px; border-radius:50%; z-index:8;
     border:1px solid rgba(233,226,176,0.35); background:rgba(0,0,0,0.18);
-    z-index:7; display:none; pointer-events:none; }
-  #knob { position:absolute; width:54px; height:54px; border-radius:50%;
-    left:33px; top:33px; background:rgba(233,226,176,0.45);
-    border:1px solid rgba(233,226,176,0.6); }
+    display:none; pointer-events:none; }
+  #knob { position:absolute; width:54px; height:54px; border-radius:50%; left:33px; top:33px;
+    background:rgba(233,226,176,0.45); border:1px solid rgba(233,226,176,0.6); }
 
-  /* 오버레이 (메뉴/탈출) */
   #ov { position:fixed; inset:0; z-index:10; display:flex; flex-direction:column;
     align-items:center; justify-content:center; text-align:center; color:#c9c08a;
     background:radial-gradient(ellipse at center,#171506 0%,#000 100%); padding:24px; }
@@ -47,14 +48,18 @@
   @keyframes pulse { 0%,100%{opacity:0.4} 50%{opacity:1} }
   .flick { animation:fl 0.12s steps(2) infinite; }
   @keyframes fl { 0%{opacity:1} 50%{opacity:0.85} }
+  #ov.dead { color:#d88a8a; }
+  #ov.dead h1 { color:#e06a6a; text-shadow:0 0 18px rgba(200,40,40,0.6); }
 </style>
 </head>
 <body>
 <div id="app"></div>
 <div id="vignette"></div>
+<div id="danger"></div>
 <div id="hud">
   <div id="lvl">LEVEL 0</div>
-  <div id="hint">초록빛을 따라가</div>
+  <div id="key">🔑</div>
+  <div id="hint"></div>
 </div>
 <div id="stick"><div id="knob"></div></div>
 
@@ -62,7 +67,7 @@
   <h1 class="flick">THE&nbsp;BACKROOMS</h1>
   <div class="sub">LEVEL&nbsp;0 — 노클립</div>
   <div class="tap" id="startBtn">탭하여 시작</div>
-  <div class="keys">왼쪽 화면 = 이동 · 오른쪽 화면 = 둘러보기<br>초록 문을 찾아 탈출해<br>(PC: WASD 이동 · 마우스 드래그로 시점)</div>
+  <div class="keys">왼쪽 = 이동 · 오른쪽 = 둘러보기<br>🔑 열쇠를 찾아 초록 문으로 탈출<br>괴물에게 잡히지 마<br>(PC: WASD · 마우스 드래그)</div>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -71,109 +76,102 @@
 "use strict";
 
 // ---------- 상수 ----------
-const CELL = 4;        // 한 칸 크기(월드 단위)
-const WALL_H = 3.0;    // 천장 높이 (낮게 = 답답)
-const EYE = 1.6;       // 눈높이
-const PLAYER_R = 0.85; // 충돌 반경
-const SPEED = 6.2;     // 이동 속도
+const CELL = 4, WALL_H = 3.0, EYE = 1.6, PLAYER_R = 0.85, SPEED = 6.2;
 const LOOK_SENS = 0.0042;
+const MON_CHASE = 4.4, MON_WANDER = 2.0, AGGRO_ON = 18, AGGRO_OFF = 30, CATCH = 1.4;
 
 // ---------- 전역 ----------
 let scene, camera, renderer, clock;
-let levelGroup = null;
-let grid = [], N = 12;
-let exitW = new THREE.Vector3();
-let level = 1;
-let yaw = 0, pitch = 0;
-let px = 0, pz = 0;        // 플레이어 월드 좌표
+let levelGroup = null, grid = [], N = 12, floorCells = [];
+let exitW = new THREE.Vector3(), level = 1;
+let yaw = 0, pitch = 0, px = 0, pz = 0;
 let ambient, hemi, playerLight;
-let state = "menu";        // menu | play | win
-let hintEl, lvlEl, ovEl, stickEl, knobEl;
+let state = "menu";
+let hintEl, lvlEl, keyEl, ovEl, stickEl, knobEl, dangerEl;
+
+// 열쇠 / 문 / 괴물
+let hasKey = false, keyW = new THREE.Vector3(), keyMesh = null, keyLight = null;
+let portalMat = null, portalLight = null;
+let monMesh = null, mon = null;
+let lastLock = 0, hintT = 0;
 
 // 입력
-let inMoveF = 0, inMoveS = 0;     // 전진/좌우 (-1~1)
+let inMoveF = 0, inMoveS = 0;
 const keys = {};
 
-// ---------- 절차적 텍스처 ----------
-function makeTex(draw, rep){
-  const c = document.createElement("canvas");
-  c.width = c.height = 256;
+// ---------- 텍스처 ----------
+function makeTex(draw){
+  const c = document.createElement("canvas"); c.width = c.height = 256;
   draw(c.getContext("2d"), 256);
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  if (rep) t.repeat.set(rep, rep);
-  return t;
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; return t;
 }
-function noise(ctx, size, n, a){
-  for (let i=0;i<n;i++){
-    const x=Math.random()*size, y=Math.random()*size, r=Math.random()*2+0.5;
-    const v=(Math.random()*40)|0;
-    ctx.fillStyle="rgba("+v+","+v+","+(v*0.7|0)+","+a+")";
-    ctx.fillRect(x,y,r,r);
-  }
+function noise(ctx, s, n, a){
+  for (let i=0;i<n;i++){ const x=Math.random()*s, y=Math.random()*s, r=Math.random()*2+0.5, v=(Math.random()*40)|0;
+    ctx.fillStyle="rgba("+v+","+v+","+(v*0.7|0)+","+a+")"; ctx.fillRect(x,y,r,r); }
 }
-const wallTex = makeTex((ctx,s)=>{
-  ctx.fillStyle="#c2b280"; ctx.fillRect(0,0,s,s);
-  // 은은한 세로 줄무늬 벽지
-  for (let x=0;x<s;x+=8){
-    ctx.fillStyle="rgba(150,138,90,0.10)"; ctx.fillRect(x,0,3,s);
-  }
-  noise(ctx,s,1400,0.05);
-});
-const floorTex = makeTex((ctx,s)=>{
-  ctx.fillStyle="#73724a"; ctx.fillRect(0,0,s,s);  // 눅눅한 카펫
-  noise(ctx,s,4000,0.12);
-  for (let i=0;i<60;i++){ // 얼룩
-    const x=Math.random()*s,y=Math.random()*s,r=Math.random()*18+4;
-    ctx.fillStyle="rgba(40,42,20,0.06)"; ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fill();
-  }
-}, 1);
-const ceilTex = makeTex((ctx,s)=>{
-  ctx.fillStyle="#cdc592"; ctx.fillRect(0,0,s,s);      // 천장 타일 테두리
-  const m=18;
-  ctx.fillStyle="#f4eecb";                              // 형광 패널 (밝게)
-  ctx.fillRect(m,m,s-2*m,s-2*m);
-  ctx.strokeStyle="rgba(120,115,70,0.5)"; ctx.lineWidth=3;
-  ctx.strokeRect(m,m,s-2*m,s-2*m);
-}, 1);
+const wallTex = makeTex((ctx,s)=>{ ctx.fillStyle="#c2b280"; ctx.fillRect(0,0,s,s);
+  for(let x=0;x<s;x+=8){ ctx.fillStyle="rgba(150,138,90,0.10)"; ctx.fillRect(x,0,3,s); } noise(ctx,s,1400,0.05); });
+const floorTex = makeTex((ctx,s)=>{ ctx.fillStyle="#73724a"; ctx.fillRect(0,0,s,s); noise(ctx,s,4000,0.12);
+  for(let i=0;i<60;i++){ const x=Math.random()*s,y=Math.random()*s,r=Math.random()*18+4;
+    ctx.fillStyle="rgba(40,42,20,0.06)"; ctx.beginPath(); ctx.arc(x,y,r,0,7); ctx.fill(); } });
+const ceilTex = makeTex((ctx,s)=>{ ctx.fillStyle="#cdc592"; ctx.fillRect(0,0,s,s); const m=18;
+  ctx.fillStyle="#f4eecb"; ctx.fillRect(m,m,s-2*m,s-2*m);
+  ctx.strokeStyle="rgba(120,115,70,0.5)"; ctx.lineWidth=3; ctx.strokeRect(m,m,s-2*m,s-2*m); });
 
-// 공유 지오메트리/머티리얼
 const boxGeo = new THREE.BoxGeometry(CELL, WALL_H, CELL);
 const wallMat = new THREE.MeshStandardMaterial({ map: wallTex, roughness:0.95, metalness:0.0 });
+const keyMat = new THREE.MeshStandardMaterial({ color:0xffcf45, emissive:0xc98a10, emissiveIntensity:0.6, roughness:0.4, metalness:0.7 });
+const monBodyMat = new THREE.MeshStandardMaterial({ color:0x08080b, roughness:1.0 });
+const eyeMat = new THREE.MeshBasicMaterial({ color:0xff1717 });
+const grinMat = new THREE.MeshBasicMaterial({ color:0xf2f2e0 });
 
-// ---------- 미로 생성 ----------
+// ---------- 격자 ----------
 function inBounds(r,c){ return r>=0 && c>=0 && r<N && c<N; }
-function reachable(g){
+function cellOf(x,z){ return [Math.floor(z/CELL), Math.floor(x/CELL)]; }
+function cellCenter(r,c){ return [(c+0.5)*CELL, (r+0.5)*CELL]; }
+
+function reachCells(g){
   const seen = Array.from({length:N},()=>new Array(N).fill(false));
-  const q=[[1,1]]; seen[1][1]=true;
-  while(q.length){
-    const [r,c]=q.pop();
-    const nb=[[r+1,c],[r-1,c],[r,c+1],[r,c-1]];
-    for(const [nr,nc] of nb){
-      if(inBounds(nr,nc) && !seen[nr][nc] && g[nr][nc]===0){ seen[nr][nc]=true; q.push([nr,nc]); }
-    }
-  }
-  return seen[N-2][N-2];
+  const out = [], q=[[1,1]]; seen[1][1]=true;
+  while(q.length){ const [r,c]=q.pop(); out.push([r,c]);
+    for(const [nr,nc] of [[r+1,c],[r-1,c],[r,c+1],[r,c-1]])
+      if(inBounds(nr,nc) && !seen[nr][nc] && g[nr][nc]===0){ seen[nr][nc]=true; q.push([nr,nc]); } }
+  return { cells: out, hasExit: seen[N-2][N-2] };
 }
 function genGrid(){
-  for(let tries=0; tries<120; tries++){
+  for(let t=0;t<150;t++){
     const g = Array.from({length:N},()=>new Array(N).fill(0));
-    for(let r=0;r<N;r++) for(let c=0;c<N;c++){
-      if(r===0||c===0||r===N-1||c===N-1) g[r][c]=1;
-      else g[r][c] = Math.random()<0.23 ? 1 : 0;
-    }
-    // 시작/출구 주변 비우기
+    for(let r=0;r<N;r++) for(let c=0;c<N;c++)
+      g[r][c] = (r===0||c===0||r===N-1||c===N-1) ? 1 : (Math.random()<0.23?1:0);
     [[1,1],[1,2],[2,1],[2,2]].forEach(([r,c])=>g[r][c]=0);
     [[N-2,N-2],[N-2,N-3],[N-3,N-2]].forEach(([r,c])=>g[r][c]=0);
-    if(reachable(g)) return g;
+    const rc = reachCells(g);
+    if(rc.hasExit){ floorCells = rc.cells; return g; }
   }
-  // 실패 시 빈 미로
   const g = Array.from({length:N},()=>new Array(N).fill(0));
   for(let i=0;i<N;i++){ g[0][i]=g[N-1][i]=g[i][0]=g[i][N-1]=1; }
-  return g;
+  floorCells = reachCells(g).cells; return g;
 }
 
-// ---------- 레벨 빌드 ----------
+// 괴물 길찾기: 시작칸→목표칸 BFS, 첫 한 걸음 반환
+function bfsNext(sr,sc,tr,tc){
+  if(sr===tr && sc===tc) return [tr,tc];
+  const key=(r,c)=>r*N+c, start=key(sr,sc), prev={}, seen=new Set([start]), q=[[sr,sc]];
+  let found=false;
+  while(q.length){
+    const [r,c]=q.shift();
+    if(r===tr && c===tc){ found=true; break; }
+    for(const [nr,nc] of [[r+1,c],[r-1,c],[r,c+1],[r,c-1]])
+      if(inBounds(nr,nc) && grid[nr][nc]===0 && !seen.has(key(nr,nc))){
+        seen.add(key(nr,nc)); prev[key(nr,nc)]=key(r,c); q.push([nr,nc]); }
+  }
+  if(!found) return null;
+  let cur=key(tr,tc);
+  while(prev[cur]!==undefined && prev[cur]!==start) cur=prev[cur];
+  return [Math.floor(cur/N), cur%N];
+}
+
+// ---------- 레벨 ----------
 function buildLevel(){
   if(levelGroup){
     scene.remove(levelGroup);
@@ -182,238 +180,232 @@ function buildLevel(){
   levelGroup = new THREE.Group();
   grid = genGrid();
   const W = N*CELL;
+  hasKey = false; keyEl.classList.remove("has");
 
-  // 바닥
-  const fTex = floorTex.clone(); fTex.needsUpdate=true; fTex.wrapS=fTex.wrapT=THREE.RepeatWrapping; fTex.repeat.set(N,N);
-  const floor = new THREE.Mesh(new THREE.PlaneGeometry(W,W),
-    new THREE.MeshStandardMaterial({ map:fTex, roughness:1.0 }));
-  floor.rotation.x = -Math.PI/2; floor.position.set(W/2, 0, W/2);
-  levelGroup.add(floor);
-
-  // 천장 (형광 패널 — 항상 밝게)
-  const cTex = ceilTex.clone(); cTex.needsUpdate=true; cTex.wrapS=cTex.wrapT=THREE.RepeatWrapping; cTex.repeat.set(N,N);
-  const ceil = new THREE.Mesh(new THREE.PlaneGeometry(W,W),
-    new THREE.MeshBasicMaterial({ map:cTex }));
-  ceil.rotation.x = Math.PI/2; ceil.position.set(W/2, WALL_H, W/2);
-  levelGroup.add(ceil);
+  // 바닥 / 천장
+  const fT=floorTex.clone(); fT.needsUpdate=true; fT.wrapS=fT.wrapT=THREE.RepeatWrapping; fT.repeat.set(N,N);
+  const floor=new THREE.Mesh(new THREE.PlaneGeometry(W,W), new THREE.MeshStandardMaterial({map:fT,roughness:1}));
+  floor.rotation.x=-Math.PI/2; floor.position.set(W/2,0,W/2); levelGroup.add(floor);
+  const cT=ceilTex.clone(); cT.needsUpdate=true; cT.wrapS=cT.wrapT=THREE.RepeatWrapping; cT.repeat.set(N,N);
+  const ceil=new THREE.Mesh(new THREE.PlaneGeometry(W,W), new THREE.MeshBasicMaterial({map:cT}));
+  ceil.rotation.x=Math.PI/2; ceil.position.set(W/2,WALL_H,W/2); levelGroup.add(ceil);
 
   // 벽
-  for(let r=0;r<N;r++) for(let c=0;c<N;c++){
-    if(grid[r][c]===1){
-      const m = new THREE.Mesh(boxGeo, wallMat);
-      m.position.set((c+0.5)*CELL, WALL_H/2, (r+0.5)*CELL);
-      levelGroup.add(m);
-    }
+  for(let r=0;r<N;r++) for(let c=0;c<N;c++) if(grid[r][c]===1){
+    const m=new THREE.Mesh(boxGeo, wallMat); m.position.set((c+0.5)*CELL, WALL_H/2, (r+0.5)*CELL); levelGroup.add(m);
   }
 
-  // 출구(초록 문) + 초록빛
-  exitW.set((N-2+0.5)*CELL, WALL_H/2, (N-2+0.5)*CELL);
-  const portal = new THREE.Mesh(
-    new THREE.BoxGeometry(0.4, WALL_H*0.92, CELL*0.7),
-    new THREE.MeshBasicMaterial({ color:0x46ff9a })
-  );
-  portal.position.copy(exitW); portal.position.y = WALL_H*0.46;
-  levelGroup.add(portal);
-  const glow = new THREE.PointLight(0x46ff9a, 1.6, 22, 1.6);
-  glow.position.copy(exitW); glow.position.y = WALL_H*0.5;
-  levelGroup.add(glow);
+  // 문(처음엔 빨갛게 잠김)
+  exitW.set((N-2+0.5)*CELL, WALL_H*0.46, (N-2+0.5)*CELL);
+  portalMat = new THREE.MeshBasicMaterial({ color:0xff3b3b });
+  const portal=new THREE.Mesh(new THREE.BoxGeometry(0.4, WALL_H*0.92, CELL*0.7), portalMat);
+  portal.position.set(exitW.x, WALL_H*0.46, exitW.z); levelGroup.add(portal);
+  portalLight=new THREE.PointLight(0xff3b3b, 1.5, 22, 1.6);
+  portalLight.position.set(exitW.x, WALL_H*0.5, exitW.z); levelGroup.add(portalLight);
+
+  // 열쇠 (시작에서 먼 칸)
+  const kCand = floorCells.filter(([r,c])=> (Math.abs(r-1)+Math.abs(c-1)) > N*0.5 && !(r===N-2&&c===N-2));
+  const kc = (kCand.length?kCand:floorCells)[(Math.random()*(kCand.length||floorCells.length))|0];
+  keyW.set((kc[1]+0.5)*CELL, 1.3, (kc[0]+0.5)*CELL);
+  keyMesh = new THREE.Group();
+  const ring=new THREE.Mesh(new THREE.TorusGeometry(0.26,0.08,8,18), keyMat);
+  const shaft=new THREE.Mesh(new THREE.BoxGeometry(0.1,0.5,0.1), keyMat); shaft.position.y=-0.42;
+  const tooth=new THREE.Mesh(new THREE.BoxGeometry(0.22,0.09,0.1), keyMat); tooth.position.set(0.1,-0.58,0);
+  keyMesh.add(ring,shaft,tooth); keyMesh.position.copy(keyW); levelGroup.add(keyMesh);
+  keyLight=new THREE.PointLight(0xffd24a, 1.2, 16, 1.6); keyLight.position.copy(keyW); levelGroup.add(keyLight);
+
+  // 괴물 (시작에서 멀리)
+  const mCand = floorCells.filter(([r,c])=> (Math.abs(r-1)+Math.abs(c-1)) > N*0.7);
+  const mc = (mCand.length?mCand:floorCells)[(Math.random()*(mCand.length||floorCells.length))|0];
+  monMesh = new THREE.Group();
+  const body=new THREE.Mesh(new THREE.CylinderGeometry(0.45,0.7,2.0,10), monBodyMat); body.position.y=1.05;
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.42,12,12), monBodyMat); head.position.y=2.05;
+  const eyeL=new THREE.Mesh(new THREE.SphereGeometry(0.1,8,8), eyeMat); eyeL.position.set(-0.16,2.08,0.34);
+  const eyeR=eyeL.clone(); eyeR.position.x=0.16;
+  const grin=new THREE.Mesh(new THREE.BoxGeometry(0.42,0.07,0.08), grinMat); grin.position.set(0,1.9,0.38);
+  monMesh.add(body,head,eyeL,eyeR,grin); levelGroup.add(monMesh);
+  mon = { x:(mc[1]+0.5)*CELL, z:(mc[0]+0.5)*CELL, aggro:false, wp:[mc[0],mc[1]], target:null, t:0 };
+  monMesh.position.set(mon.x, 0, mon.z);
 
   scene.add(levelGroup);
 
-  // 플레이어 시작 위치(좌상단 칸)
-  px = 1.5*CELL; pz = 1.5*CELL;
-  yaw = -Math.PI*0.75; pitch = 0; // 미로 안쪽(+x,+z) 바라보게
+  // 플레이어 시작
+  px=1.5*CELL; pz=1.5*CELL; yaw=-Math.PI*0.75; pitch=0;
 }
 
 // ---------- 충돌 ----------
-function isWall(wx, wz){
-  const c = Math.floor(wx/CELL), r = Math.floor(wz/CELL);
-  if(!inBounds(r,c)) return true;
-  return grid[r][c]===1;
-}
-function blocked(x, z){
-  const R = PLAYER_R;
-  const pts = [[R,0],[-R,0],[0,R],[0,-R],[R,R],[R,-R],[-R,R],[-R,-R]];
-  for(const [ox,oz] of pts){ if(isWall(x+ox, z+oz)) return true; }
-  return false;
-}
+function isWall(wx,wz){ const c=Math.floor(wx/CELL), r=Math.floor(wz/CELL); return !inBounds(r,c) || grid[r][c]===1; }
+function blocked(x,z){ const R=PLAYER_R;
+  for(const [ox,oz] of [[R,0],[-R,0],[0,R],[0,-R],[R,R],[R,-R],[-R,R],[-R,-R]]) if(isWall(x+ox,z+oz)) return true;
+  return false; }
 
-// ---------- 사운드 (형광등 웅웅) ----------
-let actx=null, hum=null;
+// ---------- 사운드 ----------
+let actx=null, hum=null, chaseG=null, chaseOsc=null;
 function startAudio(){
   try{
-    actx = new (window.AudioContext||window.webkitAudioContext)();
-    const o1 = actx.createOscillator(); o1.type="sawtooth"; o1.frequency.value=60;
-    const o2 = actx.createOscillator(); o2.type="sine";     o2.frequency.value=120;
-    const lp = actx.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=320;
-    const g  = actx.createGain(); g.gain.value=0.045;
-    o1.connect(lp); o2.connect(lp); lp.connect(g); g.connect(actx.destination);
-    o1.start(); o2.start();
-    hum = g;
+    actx=new (window.AudioContext||window.webkitAudioContext)();
+    const o1=actx.createOscillator(); o1.type="sawtooth"; o1.frequency.value=60;
+    const o2=actx.createOscillator(); o2.type="sine"; o2.frequency.value=120;
+    const lp=actx.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=320;
+    const g=actx.createGain(); g.gain.value=0.045;
+    o1.connect(lp); o2.connect(lp); lp.connect(g); g.connect(actx.destination); o1.start(); o2.start(); hum=g;
+    chaseOsc=actx.createOscillator(); chaseOsc.type="sawtooth"; chaseOsc.frequency.value=80;
+    const cf=actx.createBiquadFilter(); cf.type="lowpass"; cf.frequency.value=620;
+    chaseG=actx.createGain(); chaseG.gain.value=0;
+    chaseOsc.connect(cf); cf.connect(chaseG); chaseG.connect(actx.destination); chaseOsc.start();
   }catch(e){}
 }
+function ding(){ if(!actx) return; const t=actx.currentTime;
+  const o=actx.createOscillator(); o.type="sine"; o.frequency.setValueAtTime(880,t); o.frequency.exponentialRampToValueAtTime(1320,t+0.15);
+  const g=actx.createGain(); g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.12,t+0.02); g.gain.exponentialRampToValueAtTime(0.0001,t+0.4);
+  o.connect(g); g.connect(actx.destination); o.start(); o.stop(t+0.45); }
 
 // ---------- 초기화 ----------
 function init(){
-  hintEl=document.getElementById("hint");
-  lvlEl=document.getElementById("lvl");
-  ovEl=document.getElementById("ov");
-  stickEl=document.getElementById("stick");
-  knobEl=document.getElementById("knob");
+  hintEl=document.getElementById("hint"); lvlEl=document.getElementById("lvl"); keyEl=document.getElementById("key");
+  ovEl=document.getElementById("ov"); stickEl=document.getElementById("stick"); knobEl=document.getElementById("knob");
+  dangerEl=document.getElementById("danger");
 
-  scene = new THREE.Scene();
-  const fogCol = 0x9c9466;
-  scene.fog = new THREE.FogExp2(fogCol, 0.05);
-  scene.background = new THREE.Color(fogCol);
+  scene=new THREE.Scene();
+  const fogCol=0x9c9466; scene.fog=new THREE.FogExp2(fogCol,0.05); scene.background=new THREE.Color(fogCol);
+  camera=new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.1, 200); camera.rotation.order="YXZ";
+  renderer=new THREE.WebGLRenderer({antialias:true}); renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  renderer.setSize(innerWidth,innerHeight); document.getElementById("app").appendChild(renderer.domElement);
 
-  camera = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.1, 200);
-  camera.rotation.order = "YXZ";
+  ambient=new THREE.AmbientLight(0xfff0c0,0.75); hemi=new THREE.HemisphereLight(0xefe7b8,0x4a4a28,0.35);
+  playerLight=new THREE.PointLight(0xffe9b0,0.55,14,1.5); scene.add(ambient,hemi,playerLight);
 
-  renderer = new THREE.WebGLRenderer({ antialias:true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.setSize(innerWidth, innerHeight);
-  document.getElementById("app").appendChild(renderer.domElement);
-
-  ambient = new THREE.AmbientLight(0xfff0c0, 0.75);
-  hemi = new THREE.HemisphereLight(0xefe7b8, 0x4a4a28, 0.35);
-  playerLight = new THREE.PointLight(0xffe9b0, 0.55, 14, 1.5);
-  scene.add(ambient, hemi, playerLight);
-
-  clock = new THREE.Clock();
-  buildLevel();
-  bindControls();
-  addEventListener("resize", onResize);
-  animate();
+  clock=new THREE.Clock(); buildLevel(); bindControls();
+  addEventListener("resize",onResize); animate();
 }
-function onResize(){
-  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
+function onResize(){ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); }
+
+function flashHint(t){ hintEl.textContent=t; hintEl.classList.add("show"); hintT=clock.elapsedTime; }
+function startPlay(){ state="play"; ovEl.style.display="none"; ovEl.classList.remove("dead");
+  lvlEl.textContent="LEVEL "+level; flashHint(hasKey?"초록 문으로 탈출":"🔑 열쇠를 찾아라"); }
+
+function pickupKey(){
+  hasKey=true; keyEl.classList.add("has");
+  if(keyMesh){ levelGroup.remove(keyMesh); keyMesh=null; } if(keyLight){ levelGroup.remove(keyLight); keyLight=null; }
+  portalMat.color.set(0x46ff9a); portalLight.color.set(0x46ff9a);
+  flashHint("🔑 열쇠 획득 — 초록 문으로!"); ding();
 }
+function winLevel(){ state="win"; inMoveF=inMoveS=0; stickEl.style.display="none";
+  ovEl.classList.remove("dead");
+  ovEl.querySelector("h1").textContent="탈출 성공";
+  ovEl.querySelector(".sub").textContent="LEVEL "+level+" 클리어 — 더 깊은 곳으로";
+  ovEl.querySelector(".tap").textContent="다음 레벨 →"; ovEl.querySelector(".keys").style.display="none";
+  ovEl.style.display="flex"; }
+function dead(){ state="dead"; inMoveF=inMoveS=0; stickEl.style.display="none";
+  if(chaseG) chaseG.gain.value=0; dangerEl.style.opacity=0; ovEl.classList.add("dead");
+  ovEl.querySelector("h1").textContent="잡혔다";
+  ovEl.querySelector(".sub").textContent="LEVEL "+level+" — 괴물에게 당했다";
+  ovEl.querySelector(".tap").textContent="다시 시도"; ovEl.querySelector(".keys").style.display="none";
+  ovEl.style.display="flex"; }
 
 // ---------- 입력 ----------
 function bindControls(){
-  // 시작/탈출 오버레이 탭
-  ovEl.addEventListener("pointerdown", (e)=>{
-    e.preventDefault();
+  ovEl.addEventListener("pointerdown",(e)=>{ e.preventDefault();
     if(!actx) startAudio(); else if(actx.state==="suspended") actx.resume();
-    if(state==="menu" || state==="win"){
-      if(state==="win"){ level++; N=Math.min(24, N+2); buildLevel(); }
-      state="play"; ovEl.style.display="none";
-      lvlEl.textContent="LEVEL "+level;
-      hintEl.classList.add("show");
-      setTimeout(()=>hintEl.classList.remove("show"), 6000);
-    }
+    if(state==="menu") startPlay();
+    else if(state==="win"){ level++; N=Math.min(24,N+2); buildLevel(); startPlay(); }
+    else if(state==="dead"){ buildLevel(); startPlay(); }
   });
 
-  // 터치(멀티) : 왼쪽=이동, 오른쪽=시점
-  let moveId=null, lookId=null, sx=0, sy=0, ox=0, oy=0, lx=0, ly=0;
-  const el = renderer.domElement;
-  el.addEventListener("touchstart", (e)=>{
-    for(const t of e.changedTouches){
-      if(t.clientX < innerWidth*0.5 && moveId===null){
-        moveId=t.identifier; sx=ox=t.clientX; sy=oy=t.clientY;
-        stickEl.style.display="block";
-        stickEl.style.left=(sx-60)+"px"; stickEl.style.top=(sy-60)+"px";
-        knobEl.style.left="33px"; knobEl.style.top="33px";
-      } else if(lookId===null){
-        lookId=t.identifier; lx=t.clientX; ly=t.clientY;
-      }
-    }
-  }, {passive:true});
-  el.addEventListener("touchmove", (e)=>{
-    for(const t of e.changedTouches){
-      if(t.identifier===moveId){
-        let dx=t.clientX-sx, dy=t.clientY-sy;
-        const max=46, len=Math.hypot(dx,dy);
-        if(len>max){ dx=dx/len*max; dy=dy/len*max; }
-        knobEl.style.left=(33+dx)+"px"; knobEl.style.top=(33+dy)+"px";
-        inMoveS = dx/max; inMoveF = -dy/max;
-      } else if(t.identifier===lookId){
-        yaw   -= (t.clientX-lx)*LOOK_SENS;
-        pitch -= (t.clientY-ly)*LOOK_SENS;
-        pitch = Math.max(-1.35, Math.min(1.35, pitch));
-        lx=t.clientX; ly=t.clientY;
-      }
-    }
-  }, {passive:true});
-  const endTouch=(e)=>{
-    for(const t of e.changedTouches){
-      if(t.identifier===moveId){ moveId=null; inMoveF=inMoveS=0; stickEl.style.display="none"; }
-      if(t.identifier===lookId){ lookId=null; }
-    }
-  };
-  el.addEventListener("touchend", endTouch, {passive:true});
-  el.addEventListener("touchcancel", endTouch, {passive:true});
+  let moveId=null, lookId=null, sx=0, sy=0, lx=0, ly=0;
+  const el=renderer.domElement;
+  el.addEventListener("touchstart",(e)=>{ for(const t of e.changedTouches){
+    if(t.clientX<innerWidth*0.5 && moveId===null){ moveId=t.identifier; sx=t.clientX; sy=t.clientY;
+      stickEl.style.display="block"; stickEl.style.left=(sx-60)+"px"; stickEl.style.top=(sy-60)+"px";
+      knobEl.style.left="33px"; knobEl.style.top="33px";
+    } else if(lookId===null){ lookId=t.identifier; lx=t.clientX; ly=t.clientY; } } },{passive:true});
+  el.addEventListener("touchmove",(e)=>{ for(const t of e.changedTouches){
+    if(t.identifier===moveId){ let dx=t.clientX-sx, dy=t.clientY-sy; const max=46, len=Math.hypot(dx,dy);
+      if(len>max){ dx=dx/len*max; dy=dy/len*max; } knobEl.style.left=(33+dx)+"px"; knobEl.style.top=(33+dy)+"px";
+      inMoveS=dx/max; inMoveF=-dy/max;
+    } else if(t.identifier===lookId){ yaw-=(t.clientX-lx)*LOOK_SENS; pitch-=(t.clientY-ly)*LOOK_SENS;
+      pitch=Math.max(-1.35,Math.min(1.35,pitch)); lx=t.clientX; ly=t.clientY; } } },{passive:true});
+  const endTouch=(e)=>{ for(const t of e.changedTouches){
+    if(t.identifier===moveId){ moveId=null; inMoveF=inMoveS=0; stickEl.style.display="none"; }
+    if(t.identifier===lookId) lookId=null; } };
+  el.addEventListener("touchend",endTouch,{passive:true}); el.addEventListener("touchcancel",endTouch,{passive:true});
 
-  // PC : 마우스 드래그 시점 + WASD
   let dragging=false, mx=0, my=0;
   el.addEventListener("mousedown",(e)=>{ dragging=true; mx=e.clientX; my=e.clientY; });
   addEventListener("mouseup",()=>dragging=false);
-  addEventListener("mousemove",(e)=>{
-    if(!dragging) return;
-    yaw   -= (e.clientX-mx)*LOOK_SENS;
-    pitch -= (e.clientY-my)*LOOK_SENS;
-    pitch = Math.max(-1.35, Math.min(1.35, pitch));
-    mx=e.clientX; my=e.clientY;
-  });
+  addEventListener("mousemove",(e)=>{ if(!dragging) return; yaw-=(e.clientX-mx)*LOOK_SENS; pitch-=(e.clientY-my)*LOOK_SENS;
+    pitch=Math.max(-1.35,Math.min(1.35,pitch)); mx=e.clientX; my=e.clientY; });
   addEventListener("keydown",(e)=>keys[e.key.toLowerCase()]=true);
   addEventListener("keyup",(e)=>keys[e.key.toLowerCase()]=false);
+}
+
+// ---------- 괴물 사고 ----------
+function monThink(){
+  const [mr,mc]=cellOf(mon.x,mon.z); let tr,tc;
+  if(mon.aggro){ const p=cellOf(px,pz); tr=p[0]; tc=p[1]; }
+  else { if(!mon.target || (mr===mon.target[0]&&mc===mon.target[1])) mon.target=floorCells[(Math.random()*floorCells.length)|0];
+    tr=mon.target[0]; tc=mon.target[1]; }
+  const nxt=bfsNext(mr,mc,tr,tc); mon.wp = nxt || [mr,mc];
 }
 
 // ---------- 루프 ----------
 function animate(){
   requestAnimationFrame(animate);
-  const dt = Math.min(clock.getDelta(), 0.05);
+  const dt=Math.min(clock.getDelta(),0.05);
+
+  // 열쇠 회전
+  if(keyMesh){ keyMesh.rotation.y+=dt*2.2; keyMesh.position.y=1.3+Math.sin(clock.elapsedTime*2)*0.12; }
 
   if(state==="play"){
-    // 키보드 입력 합산
-    let kf=0, ks=0;
-    if(keys["w"]||keys["arrowup"]) kf+=1;
-    if(keys["s"]||keys["arrowdown"]) kf-=1;
-    if(keys["d"]||keys["arrowright"]) ks+=1;
-    if(keys["a"]||keys["arrowleft"]) ks-=1;
-    let mf = inMoveF + kf, ms = inMoveS + ks;
-    const mag = Math.hypot(mf, ms);
-    if(mag>1){ mf/=mag; ms/=mag; }
+    // 이동
+    let kf=0,ks=0;
+    if(keys["w"]||keys["arrowup"]) kf+=1; if(keys["s"]||keys["arrowdown"]) kf-=1;
+    if(keys["d"]||keys["arrowright"]) ks+=1; if(keys["a"]||keys["arrowleft"]) ks-=1;
+    let mf=inMoveF+kf, ms=inMoveS+ks; const mag=Math.hypot(mf,ms); if(mag>1){ mf/=mag; ms/=mag; }
+    const fx=-Math.sin(yaw), fz=-Math.cos(yaw), rx=Math.cos(yaw), rz=-Math.sin(yaw);
+    const vx=(fx*mf+rx*ms)*SPEED*dt, vz=(fz*mf+rz*ms)*SPEED*dt;
+    if(!blocked(px+vx,pz)) px+=vx; if(!blocked(px,pz+vz)) pz+=vz;
 
-    // 시점 기준 이동벡터
-    const fx=-Math.sin(yaw), fz=-Math.cos(yaw); // 전진(-Z)
-    const rx= Math.cos(yaw), rz=-Math.sin(yaw); // 우측
-    const vx=(fx*mf + rx*ms)*SPEED*dt;
-    const vz=(fz*mf + rz*ms)*SPEED*dt;
+    // 열쇠 줍기
+    if(keyMesh && Math.hypot(px-keyW.x,pz-keyW.z)<1.6) pickupKey();
 
-    if(!blocked(px+vx, pz)) px+=vx;
-    if(!blocked(px, pz+vz)) pz+=vz;
+    // 괴물
+    const dist=Math.hypot(px-mon.x,pz-mon.z);
+    if(!mon.aggro && dist<AGGRO_ON) mon.aggro=true; else if(mon.aggro && dist>AGGRO_OFF){ mon.aggro=false; mon.target=null; }
+    mon.t-=dt; if(mon.t<=0){ monThink(); mon.t=mon.aggro?0.35:0.6; }
+    let aimx, aimz;
+    if(mon.aggro && dist<CELL*1.4){ aimx=px; aimz=pz; }
+    else { const cc=cellCenter(mon.wp[0],mon.wp[1]); aimx=cc[0]; aimz=cc[1]; }
+    let dx=aimx-mon.x, dz=aimz-mon.z; const dd=Math.hypot(dx,dz)||1;
+    const spd=mon.aggro?MON_CHASE:MON_WANDER;
+    mon.x+=dx/dd*spd*dt; mon.z+=dz/dd*spd*dt;
+    if(dd<0.3) mon.t=Math.min(mon.t,0.05);
+    monMesh.rotation.y=Math.atan2(px-mon.x,pz-mon.z);
+    monMesh.position.set(mon.x, Math.sin(clock.elapsedTime*4)*0.06, mon.z);
+    if(dist<CATCH){ dead(); }
 
-    // 출구 도달 → 탈출
-    const dEx = Math.hypot(px-exitW.x, pz-exitW.z);
-    if(dEx < CELL*0.6){ winLevel(); }
+    // 위협 사운드 / 화면
+    const prox=mon.aggro?Math.max(0,1-dist/AGGRO_ON):0;
+    if(chaseG) chaseG.gain.value=prox*0.07; if(chaseOsc) chaseOsc.frequency.value=70+prox*70;
+    dangerEl.style.opacity=(prox*0.55).toFixed(2);
+
+    // 출구
+    const dEx=Math.hypot(px-exitW.x,pz-exitW.z);
+    if(dEx<CELL*0.6){ if(hasKey) winLevel();
+      else if(clock.elapsedTime-lastLock>2){ lastLock=clock.elapsedTime; flashHint("잠겨있다 — 🔑 열쇠를 먼저"); } }
   }
 
   // 형광등 깜빡임
-  let flick = 0.78 + Math.sin(clock.elapsedTime*7.0)*0.03;
-  if(Math.random() < 0.022) flick = 0.30 + Math.random()*0.25;
-  ambient.intensity = flick;
-  if(playerLight) playerLight.intensity = 0.45 + flick*0.2;
-  if(hum) hum.gain.value = 0.045 + (flick<0.5 ? 0.03 : 0);
+  let flick=0.78+Math.sin(clock.elapsedTime*7)*0.03; if(Math.random()<0.022) flick=0.30+Math.random()*0.25;
+  ambient.intensity=flick; if(playerLight) playerLight.intensity=0.45+flick*0.2;
+  if(hum) hum.gain.value=0.045+(flick<0.5?0.03:0);
 
-  // 카메라 적용
-  camera.position.set(px, EYE, pz);
-  camera.rotation.y = yaw;
-  camera.rotation.x = pitch;
-  if(playerLight) playerLight.position.set(px, EYE+0.3, pz);
+  // 힌트 자동 숨김
+  if(hintEl.classList.contains("show") && clock.elapsedTime-hintT>5) hintEl.classList.remove("show");
 
-  renderer.render(scene, camera);
-}
-
-function winLevel(){
-  state="win";
-  inMoveF=inMoveS=0; stickEl.style.display="none";
-  ovEl.querySelector("h1").textContent="탈출 성공";
-  ovEl.querySelector(".sub").textContent="LEVEL "+level+" 클리어 — 더 깊은 곳으로";
-  ovEl.querySelector(".tap").textContent="다음 레벨 →";
-  ovEl.querySelector(".keys").style.display="none";
-  ovEl.style.display="flex";
+  camera.position.set(px,EYE,pz); camera.rotation.y=yaw; camera.rotation.x=pitch;
+  if(playerLight) playerLight.position.set(px,EYE+0.3,pz);
+  renderer.render(scene,camera);
 }
 
 init();
