@@ -443,9 +443,9 @@ function animate(){
   }
 
   // 형광등 깜빡임
-  let flick=0.78+Math.sin(clock.elapsedTime*7)*0.03; if(Math.random()<0.022) flick=0.30+Math.random()*0.25;
+  let flick=0.80+Math.sin(clock.elapsedTime*7)*0.012; if(Math.random()<0.008) flick=0.62+Math.random()*0.12;
   ambient.intensity=flick; if(playerLight) playerLight.intensity=0.45+flick*0.2;
-  if(hum) hum.gain.value=0.045+(flick<0.5?0.03:0);
+  if(hum) hum.gain.value=0.045+(flick<0.7?0.02:0);
 
   // 힌트 자동 숨김
   if(hintEl.classList.contains("show") && clock.elapsedTime-hintT>5) hintEl.classList.remove("show");
